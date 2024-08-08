@@ -178,6 +178,7 @@ static inline bool sema_create_const_max(SemaContext *context, Expr *expr, Type 
 static inline bool sema_create_const_params(SemaContext *context, Expr *expr, Type *type);
 static inline void sema_create_const_membersof(SemaContext *context, Expr *expr, Type *type, AlignSize alignment,
 											   AlignSize offset);
+static inline void sema_create_const_methodsof(SemaContext *context, Expr *expr, Type *type);
 
 static inline int64_t expr_get_index_max(Expr *expr);
 static inline bool expr_both_any_integer_or_integer_vector(Expr *left, Expr *right);
@@ -1004,7 +1005,7 @@ static inline bool sema_expr_analyse_identifier(SemaContext *context, Type *to, 
 	if (decl_needs_prefix(decl))
 	{
 		if (!sema_analyse_decl(context, decl)) return false;
-		if (decl_module(decl) != context->unit->module && !expr->identifier_expr.path)
+		if (decl->unit->module != context->unit->module && !expr->identifier_expr.path)
 		{
 			const char *message;
 			switch (decl->decl_kind)
@@ -1410,7 +1411,7 @@ INLINE bool sema_call_expand_arguments(SemaContext *context, CalledDecl *callee,
 				bool success;
 				SCOPE_START
 					new_context->original_inline_line = context->original_inline_line ? context->original_inline_line : call->span.row;
-					new_context->original_module = context->original_module ? context->original_module : context->core_module;
+					new_context->original_module = context->original_module;
 					success = sema_analyse_expr_rhs(new_context, param->type, arg, true, no_match_ref, false);
 				SCOPE_END;
 				sema_context_destroy(&default_context);
@@ -3333,7 +3334,7 @@ static inline bool sema_expr_analyse_type_access(SemaContext *context, Expr *exp
 		{
 			RETURN_SEMA_ERROR(expr, "'%s' is an ambiguous name and so cannot be resolved, "
 									"it may refer to method defined in '%s' or one in '%s'",
-					   name, decl_module(member)->name->module, decl_module(ambiguous)->name->module);
+					   name, member->unit->module->name->module, ambiguous->unit->module->name->module);
 		}
 	}
 	if (!member)
@@ -3405,6 +3406,8 @@ static inline bool sema_expr_analyse_member_access(SemaContext *context, Expr *e
 		case TYPE_PROPERTY_MEMBERSOF:
 			sema_create_const_membersof(context, expr, decl->type->canonical, parent->const_expr.member.align, parent->const_expr.member.offset);
 			return true;
+		case TYPE_PROPERTY_METHODSOF:
+			sema_create_const_methodsof(context, expr, decl->type->canonical);
 		case TYPE_PROPERTY_KINDOF:
 		case TYPE_PROPERTY_SIZEOF:
 			return sema_expr_rewrite_to_type_property(context, expr, decl->type->canonical, type_property, decl->type->canonical);
@@ -3458,6 +3461,7 @@ MISSING_REF:
 	*missing_ref = true;
 	return false;
 }
+
 
 static inline void sema_expr_rewrite_typeid_kind(Expr *expr, Expr *parent)
 {
@@ -3702,6 +3706,42 @@ static inline void sema_create_const_membersof(SemaContext *context, Expr *expr,
 	expr_rewrite_const_untyped_list(expr, member_exprs);
 }
 
+
+static inline void sema_create_const_methodsof(SemaContext *context, Expr *expr, Type *type)
+{
+	Decl **methods = type->decl->methods;
+	unsigned method_count = vec_size(methods);
+	
+	if (!method_count)
+	{
+		expr_rewrite_const_untyped_list(expr, NULL);
+		return;
+	}
+
+	Expr **method_exprs = method_count ? VECNEW(Expr*, method_count) : NULL;
+	for (unsigned i = 0; i < method_count; i++)
+	{
+		Decl *method = methods[i];
+		if (method->decl_kind == DECL_FUNC)
+		{
+			Decl *decl = methods[i];
+			size_t namestr_len = strlen(decl->name);
+			const char *namestr = str_copy(decl->name, namestr_len);
+			Expr *expr_element = expr_new(EXPR_CONST, expr->span);
+			expr_element->resolve_status = RESOLVE_DONE;
+			expr_element->type = type_string;
+			expr_element->const_expr = (ExprConst) {
+				.const_kind = CONST_STRING,
+				.bytes.ptr = namestr,
+				.bytes.len = namestr_len,
+			};
+			vec_add(method_exprs, expr_element);
+		}
+	}
+	expr_rewrite_const_untyped_list(expr, method_exprs);
+}
+
+
 static inline bool sema_create_const_max(SemaContext *context, Expr *expr, Type *type, Type *flat)
 {
 	if (type_is_integer(flat))
@@ -3827,6 +3867,7 @@ static bool sema_expr_rewrite_to_typeid_property(SemaContext *context, Expr *exp
 		case TYPE_PROPERTY_RETURNS:
 		case TYPE_PROPERTY_PARAMS:
 		case TYPE_PROPERTY_MEMBERSOF:
+		case TYPE_PROPERTY_METHODSOF:
 		case TYPE_PROPERTY_EXTNAMEOF:
 		case TYPE_PROPERTY_NAMEOF:
 		case TYPE_PROPERTY_QNAMEOF:
@@ -4063,6 +4104,16 @@ static bool sema_type_property_is_valid_for_type(Type *original_type, TypeProper
 				default:
 					return false;
 			}
+		case TYPE_PROPERTY_METHODSOF:
+			switch (type->type_kind)
+			{
+				case TYPE_STRUCT:
+				case TYPE_UNION:
+				case TYPE_BITSTRUCT:
+					return true;
+				default:
+					return false;
+			}
 		case TYPE_PROPERTY_PARAMS:
 		case TYPE_PROPERTY_RETURNS:
 			return type_is_func_ptr(type);
@@ -4135,6 +4186,11 @@ static bool sema_expr_rewrite_to_type_property(SemaContext *context, Expr *expr,
 			AlignSize align;
 			if (!sema_set_abi_alignment(context, parent_type, &align)) return false;
 			sema_create_const_membersof(context, expr, flat, align, 0);
+			return true;
+		}
+		case TYPE_PROPERTY_METHODSOF:
+		{
+			sema_create_const_methodsof(context, expr, flat);
 			return true;
 		}
 		case TYPE_PROPERTY_PARAMS:
@@ -4537,7 +4593,7 @@ CHECK_DEEPER:
 		{
 			RETURN_SEMA_ERROR(expr, "'%s' is an ambiguous name and so cannot be resolved, "
 									"it may refer to method defined in '%s' or one in '%s'",
-									kw, decl_module(method)->name->module, decl_module(ambiguous)->name->module);
+									kw, method->unit->module->name->module, ambiguous->unit->module->name->module);
 		}
 		if (!method)
 		{
@@ -4580,9 +4636,8 @@ CHECK_DEEPER:
 		}
 		if (ambiguous)
 		{
-			SEMA_ERROR(expr, "'%s' is an ambiguous name and so cannot be resolved, it may refer to method defined in '%s' or one in '%s'",
-					   kw, decl_module(member)->name->module, decl_module(ambiguous)->name->module);
-			return false;
+			RETURN_SEMA_ERROR(expr, "'%s' is an ambiguous name and so cannot be resolved, it may refer to method defined in '%s' or one in '%s'",
+					   kw, member->unit->module->name->module, ambiguous->unit->module->name->module);
 		}
 	}
 
@@ -7988,7 +8043,7 @@ static inline bool sema_expr_analyse_decl_element(SemaContext *context, Designat
 		if (ambiguous)
 		{
 			sema_error_at(context, loc, "'%s' is an ambiguous name and so cannot be resolved, it may refer to method defined in '%s' or one in '%s'",
-					   kw, decl_module(member)->name->module, decl_module(ambiguous)->name->module);
+					   kw, member->unit->module->name->module, ambiguous->unit->module->name->module);
 			return false;
 		}
 		if (is_missing)
@@ -8170,7 +8225,7 @@ RETURN_CT:
 		return true;
 	}
 	scratch_buffer_clear();
-	scratch_buffer_append(decl_module(decl)->name->module);
+	scratch_buffer_append(decl->unit->module->name->module);
 	scratch_buffer_append("::");
 	scratch_buffer_append(decl->name);
 	expr_rewrite_to_string(expr, scratch_buffer_copy());

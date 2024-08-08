@@ -24,6 +24,7 @@
 - Add `@const` attribute for macros, for better error messages with constant macros.
 - Add `wincrt` setting to libraries.
 - Add `+++` `&&&` `|||` as replacement for `$concat`, `$and` and `$or`.
+- Add `methodsof` to type info for struct, union and bitstruct
 
 ### Fixes
 
@@ -41,10 +42,20 @@
 - Bug in List add_array when reserving memory.
 - Fix issue where a compile time parameter is followed by "...".
 - Fix issue with some conversions to untyped list.
+- Issue where a `if (catch e = ...)` in a defer would be incorrectly copied. Causing codegen error.
+- Variable in if-try / if-catch cannot be a reused variable name.
+- Vararg interfaces were broken.
+- LLVM codegen for constants in enums could fail.
+- Fixes to the socket functions.
+- Improved output when pointer is out of range.
+- Better error when casting to a distinct fails.
+- With single module, name the .o file after what `-o` provides. #1306
 
 ### Stdlib changes
 
-None
+- `send` and `recv` added to `libc` for Posix / Win32.
+- Add support to destroy temp allocators.
+- Fix Vec2.angle
 
 ## 0.6.1 Change list
 

@@ -1732,7 +1732,6 @@ typedef struct InliningSpan_
 
 struct SemaContext_
 {
-	Module *core_module;
 	// Evaluated in this.
 	CompilationUnit *unit;
 	// Compiled in this unit.
@@ -1778,6 +1777,7 @@ typedef struct
 {
 	HTable modules;
 	Module *core_module;
+	CompilationUnit *core_unit;
 	Module **module_list;
 	Module **generic_module_list;
 	Type **type;
@@ -2097,7 +2097,7 @@ Int int_shr64(Int op, uint64_t);
 Int int_shl64(Int op, uint64_t);
 Real int_to_real(Int op);
 Int int_from_real(Real d, TypeKind type);
-char *int_to_str(Int i, int radix);
+char *int_to_str(Int i, int radix, bool use_prefix);
 bool i128_can_convert_from_double(double x);
 bool i128_can_convert_from_double_signed(double x);
 Int128 i128_from_double(double x);
@@ -2117,7 +2117,7 @@ Int128 i128_not(Int128 op1);
 Int128 i128_mult(Int128 op1, Int128 op2);
 Int128 i128_mult64(Int128 op1, uint64_t op2);
 Int128 i128_from_str(const char *str);
-char *i128_to_string(Int128 op, uint64_t base, bool is_signed);
+char *i128_to_string(Int128 op, uint64_t base, bool is_signed, bool use_prefix);
 bool i128_is_neg(Int128 op);
 CmpRes i128_ucomp(Int128 op1, Int128 op2);
 CmpRes i128_scomp(Int128 op1, Int128 op2);
@@ -2250,7 +2250,6 @@ static inline Decl *decl_raw(Decl *decl);
 static inline DeclKind decl_from_token(TokenType type);
 static inline bool decl_is_var_local(Decl *decl);
 bool decl_is_ct_var(Decl *decl);
-INLINE Module* decl_module(Decl *decl);
 Decl *decl_find_enum_constant(Decl *decl, const char *name);
 bool decl_needs_prefix(Decl *decl);
 AlignSize decl_find_member_offset(Decl *decl, Decl *member);
@@ -2420,6 +2419,7 @@ bool sema_type_error_on_binop(SemaContext *context, Expr *expr);
 
 File *source_file_by_id(FileId file);
 File *source_file_load(const char *filename, bool *already_loaded, const char **error);
+File *source_file_generate(const char *filename);
 File *source_file_text_load(const char *filename, const char *content);
 
 File *compile_and_invoke(const char *file, const char *args);
@@ -3077,7 +3077,7 @@ static inline Type *type_flatten_no_export(Type *type)
 		switch (type->type_kind)
 		{
 			case TYPE_TYPEDEF:
-				if (!type->decl || type->decl->is_export) return type;
+				if (type->decl->is_export) return type;
 				type = type->canonical;
 				break;
 			case TYPE_DISTINCT:
@@ -3782,10 +3782,6 @@ INLINE bool decl_var_kind_is_ct(VarDeclKind kind)
 	return kind >= VARDECL_FIRST_CT && kind <= VARDECL_LAST_CT;
 }
 
-INLINE Module *decl_module(Decl *decl)
-{
-	return decl->unit ? decl->unit->module : global_context.core_module;
-}
 
 static inline bool decl_is_var_local(Decl *decl)
 {
