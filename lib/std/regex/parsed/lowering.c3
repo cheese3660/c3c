@@ -40,8 +40,8 @@ fn void SingleAutomaton.reduce(&self) @private
 {
     @pool() 
     {
-        bool[] keep = mem::temp_array(bool, self.stateEdgesEnd.len());
-        for (usz i = 0; i < self.states.len(); i++) keep[i] = false;
+        bool[] keep = mem::temp_array(bool, self.stateEdgesBegin.len());
+        for (usz i = 0; i < self.stateEdgesBegin.len(); i++) keep[i] = false;
         keep[self.end] = true;
         keep[self.begin] = true;
 
@@ -52,13 +52,13 @@ fn void SingleAutomaton.reduce(&self) @private
         // 3. Have an edge coming into them that begins or ends a capture group
         //
         // 2 is necessary because of how we store capture groups in memory in the engine itself
-        for (usz analyzing = 0; analyzing < self.stateEdgesBegin.len(); i++) 
+        for (usz analyzing = 0; analyzing < self.stateEdgesBegin.len(); analyzing++) 
         {
             usz begin = self.stateEdgesBegin[analyzing];
             ushort count = self.stateEdgeCount[analyzing];
             
             for (usz edgeIndex = begin; edgeIndex < begin + count; edgeIndex++) {
-                AutomatonEdge &edge = &self.edges[edgeIndex];
+                AutomatonEdge *edge = &self.edges[edgeIndex];
                 if (edge.nextState == self.end) continue;
                 if (edge.transitionType != EPSILON) keep[edge.nextState] = true;
                 
@@ -83,7 +83,7 @@ fn void SingleAutomaton.reduce(&self) @private
         List { uint } stateStack;
         List { usz }  edgeStack;
 
-        for (usz reducing = 0; reducing < oldBegin.len; reducing++) 
+        for (uint reducing = 0; reducing < oldBegin.len; reducing++) 
         {
             if (reducing == self.end) {
                 self.stateEdgesBegin.push(0);
@@ -103,12 +103,12 @@ fn void SingleAutomaton.reduce(&self) @private
 
             while (stateStack.len() > 0) 
             {
-                usz curStateIdx = stateStack.pop()!!;
+                uint curStateIdx = stateStack.pop()!!;
                 usz curEdgeIdx = edgeStack.pop()!!;
 
                 if (curEdgeIdx + 1 < oldCount[curStateIdx]) 
                 {
-                    stateStack.push(curStateidx);
+                    stateStack.push(curStateIdx);
                     edgeStack.push(curEdgeIdx + 1);
                 }
 
@@ -131,7 +131,7 @@ fn void SingleAutomaton.reduce(&self) @private
             self.stateEdgeCount.push(newCount);
         }
 
-        for (&edge : self.edges) 
+        foreach (&edge : self.edges)
         {
             edge.nextState = remap[edge.nextState];
         }
@@ -188,5 +188,8 @@ struct InternedStringInfo @private
 *>
 fn InternedStringInfo unescape_and_intern_string(String toIntern, DString *internmentCache) @private 
 {
-    if (internmentCache.len == 0) internmentCache.tinit();
+    if (internmentCache.len() == 0) internmentCache.tinit();
+    @pool() {
+        return {};
+    };
 }

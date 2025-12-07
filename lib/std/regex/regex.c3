@@ -8,7 +8,8 @@ faultdef NO_MATCH;
 <*
     Options that change how regexes behave
 *>
-enum Options : const char {
+enum Options : const char 
+{
     <* Default regex behaviour *>
     NONE = 0,
     <* $ and ^ match on lines instead of the full string *>
@@ -20,11 +21,13 @@ enum Options : const char {
 <*
     An interface for a regex implementation, done such that making compiled regular expressions can be much easier in the future
 *>
-interface Regex {
+interface Regex 
+{
     <*
-        @param view: "The string view being matched over"
-        @param offset: "The offset in the view to match at"
-        @param matchAllocator: "The allocator being used to allocate the array of captures"
+        @param view             : "The string view being matched over"
+        @param offset           : "The offset in the view to match at"
+        @param matchAllocator   : "The allocator being used to allocate the array of captures"
+
         @return? NO_MATCH : "If there is no match starting at the offset"
         @return "A match starting at the offset"
     *>
@@ -36,13 +39,8 @@ interface Regex {
     fn void free();
 }
 
-
-import std::io;
-fn void Regex.print(&self) {
-    io::printn("Test");
-}
-
-struct Match {
+struct Match 
+{
     Allocator allocator;
     String fullView;
     <* captureBegin is inclusive*>
@@ -53,7 +51,8 @@ struct Match {
 }
 
 
-fn void Match.free(&self) {
+fn void Match.free(&self) 
+{
     allocator::free(self.allocator,self.captureBegin);
     allocator::free(self.allocator,self.captureEnd);
 }
