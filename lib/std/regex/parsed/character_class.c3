@@ -41,3 +41,4 @@ fn usz? CharacterClass.to_format(&self, Formatter* formatter) @dynamic
     n += formatter.print("]")!;
     return n;
 }
+
