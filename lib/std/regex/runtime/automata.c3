@@ -1,7 +1,7 @@
 <*
     This module contains a runtime non-deterministic finite automata engine for running regular expressions
 *>
-module std::regex::parsed::automata;
+module std::regex::runtime::automata;
 
 import std::regex;
 import std::collections::list;
@@ -144,8 +144,10 @@ struct NfaRegexStaticContext @private
 *>
 fn uint NfaRegexStaticContext.get_new_capture_array(&self, ushort num_capture_groups) @private 
 {
-    foreach (i, &entry : self.allocated_captures) {
-        if (!entry.ref_count) {
+    foreach (i, &entry : self.allocated_captures) 
+    {
+        if (!entry.ref_count) 
+        {
             entry.ref_count = 1;
             entry.begin = mem::temp_array(usz, num_capture_groups);
             entry.end = mem::temp_array(usz, num_capture_groups);
@@ -417,9 +419,9 @@ fn bool NfaRegex.should_transition(&self, usz edge_offset, usz current_index, St
             return  (is_word_character(view[current_index]) && is_word_character(view[current_index-1])) || 
                     (!is_word_character(view[current_index - 1]) && !is_word_character(view[current_index]));
         case POS_LOOKAHEAD:
-            return self.matches_at(view, current_index, data.sub_automaton_index);
+            return self.matches_at(view, current_index, data.sub_automaton_index, captures);
         case NEG_LOOKAHEAD:
-            return !self.matches_at(view, current_index, data.sub_automaton_index);
+            return !self.matches_at(view, current_index, data.sub_automaton_index, captures);
     }
 }
 
@@ -558,15 +560,17 @@ fn Match? NfaRegex.match_in_view(&self, String view, usz offset, Allocator match
     @param [&in] self
     @param view                 : "The string view being matched over"
     @param offset               : "The offset in the view to match at"
-    @param sub_automaton_index    : "The subautomaton to check"
+    @param sub_automaton_index  : "The subautomaton to check"
+    @param capture_base         : "The parent capture group array"
 
     @require offset < view.len : "Offset is out of bounds of the string"
     @require sub_automaton_index < self.automaton_count : "Invalid subautomaton index"
+    @require capture_base.ref_count > 0 : "The capture group array is deallocated"
 
     @return "If the sub-automaton matches at the given offset"
 
 *>
-fn bool NfaRegex.matches_at(&self, String view, usz offset, usz sub_automaton_index) 
+fn bool NfaRegex.matches_at(&self, String view, usz offset, usz sub_automaton_index, CaptureEntry capture_base) 
 {
     uint begin_state = self.automaton_begin[sub_automaton_index];
     uint end_state = self.automaton_end[sub_automaton_index];
@@ -579,8 +583,8 @@ fn bool NfaRegex.matches_at(&self, String view, usz offset, usz sub_automaton_in
         usz* array_end = static_context.allocated_captures[starting_capture_array].end;
         for (ushort i = 0 ; i < self.num_capture_groups; i++) 
         {
-            array_begin[i] = usz.max;
-            array_end[i] = usz.max;
+            array_begin[i] = capture_base.begin[i];
+            array_end[i] = capture_base.end[i];
         }
 
         List { NfaRegexStackContext } context_stack;

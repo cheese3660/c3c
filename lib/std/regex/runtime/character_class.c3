@@ -1,7 +1,7 @@
 <*
     This module implements the concept of character groups in a regular expression
 *>
-module std::regex::parsed::character_class;
+module std::regex::runtime::character_class;
 
 import std::io;
 

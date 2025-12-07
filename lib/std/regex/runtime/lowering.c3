@@ -1,9 +1,10 @@
 <*
     This module implements lowering a regular expression syntax tree into a set of non-deterministic finite automata
 *>
-module std::regex::parsed::lowering;
+module std::regex::runtime::lowering;
 
-import std::regex::parsed::automata;
+import std::regex::runtime::automata;
+import std::regex::runtime::character_class;
 import std::collections::list;
 
 
@@ -158,12 +159,14 @@ fn void SingleAutomaton.insert_into(&self, NfaRegex *regex, ushort automaton_ind
 {
     regex.automaton_begin[automaton_index] = self.begin + state_offset;
     regex.automaton_end[automaton_index] = self.end + state_offset;
-    foreach (i, edgesBegin : self.state_edges_begin) {
+    foreach (i, edgesBegin : self.state_edges_begin) 
+    {
         regex.state_edges_begin[i + state_offset] = edgesBegin + edge_offset;
         regex.state_edge_count[i + state_offset] = self.state_edge_count[i];
     }
 
-    foreach (i, &edge : self.edges) {
+    foreach (i, &edge : self.edges) 
+    {
         regex.edge_to[i + edge_offset] = edge.next_state + state_offset;
         regex.transition_type[i + edge_offset] = edge.transition_type;
         regex.edge_capture_begin[i + edge_offset] = edge.capture_begin;
@@ -178,18 +181,49 @@ struct InternedStringInfo @private
     usz len;
 }
 
+
 <*
-    Unescape and intern a string into a dstring
+    Intern a string into a dstring
 
     @param to_intern                 : "The string to intern"
-    @param [&in] internment_cache    : "The internment cache itself"
+    @param [&in] internment_cache
 
-    @return
+
+    @return "The position in the interment cache of the string"
 *>
-fn InternedStringInfo unescape_and_intern_string(String to_intern, DString *internment_cache) @private 
+fn InternedStringInfo intern_string(String to_intern, DString *internment_cache) @private 
 {
     if (internment_cache.len() == 0) internment_cache.tinit();
-    @pool() {
-        return {};
-    };
+
+    if (try index = internment_cache.str_view().index_of(to_intern)) 
+    {
+        return {index, to_intern.len};
+    } 
+    else 
+    {
+        usz index = internment_cache.len();
+        internment_cache.append_chars(to_intern);
+        return {index, to_intern.len};
+    }
+}
+
+<*
+    Intern a character class
+
+    @param to_intern : "The character class to intern"
+    @param [&in] internment_cache
+
+    @return "The index to be used for edge associated data"
+*>
+fn uint intern_character_class(CharacterClass to_intern, List { CharacterClass } *internment_cache) {
+    for (uint i = 0; i < internment_cache.len(); i++) 
+    {
+        if (to_intern == internment_cache.get(i)) 
+        {
+            return i;
+        }
+    }
+
+    internment_cache.push(to_intern);
+    return (uint)(internment_cache.len() - 1);
 }

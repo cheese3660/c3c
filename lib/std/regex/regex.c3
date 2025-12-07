@@ -1,9 +1,19 @@
 module std::regex;
-import std::regex::parsed::automata;
+import std::regex::runtime::automata;
 
 alias RuntimeRegex = automata::NfaRegex;
 
 faultdef NO_MATCH;
+faultdef INVALID_ESCAPE_SEQUENCE;
+faultdef UNTERMINATED_CHARACTER_GROUP;
+faultdef UNTERMINATED_RANGE_QUANTIFIER;
+faultdef UNEXPECTED_CHARACTER;
+faultdef UNFILLED_RANGE_QUANTIFIER;
+faultdef UNEXPECTED_END_OF_INPUT;
+faultdef INVALID_RANGE_QUANTIFIER;
+faultdef UNEXPECTED_TOKEN;
+faultdef UNTERMINATED_SUBEXPRESSION;
+
 
 <*
     Options that change how regexes behave
