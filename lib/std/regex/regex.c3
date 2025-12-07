@@ -26,12 +26,12 @@ interface Regex
     <*
         @param view             : "The string view being matched over"
         @param offset           : "The offset in the view to match at"
-        @param matchAllocator   : "The allocator being used to allocate the array of captures"
+        @param match_allocator   : "The allocator being used to allocate the array of captures"
 
         @return? NO_MATCH : "If there is no match starting at the offset"
         @return "A match starting at the offset"
     *>
-    fn Match? match_in_view(String view, usz offset, Allocator matchAllocator);
+    fn Match? match_in_view(String view, usz offset, Allocator match_allocator);
 
     <*
         Releases the memory used to describe the regex, may be empty on a compile time implementation

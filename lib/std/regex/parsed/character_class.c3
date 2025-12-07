@@ -27,10 +27,10 @@ fn bool CharacterClass.get(self, usz i) @operator([]) @inline => ((BitSet {256})
 fn void CharacterClass.set(&self, usz i, bool b) @operator([]=) @inline => ((BitSet {256}*)self).set_bool(i,b);
 
 fn bool CharacterClass.equals(&self, CharacterClass other) @operator(==) {
-    BitSet {256} *bitsetSelf = (BitSet {256}*)self;
-    BitSet {256} bitsetOther = (BitSet {256})other;
-    foreach (idx, val : bitsetSelf.data) {
-        if (val != bitsetOther.data[idx]) return false;
+    BitSet {256} *bitset_self = (BitSet {256}*)self;
+    BitSet {256} bitset_other = (BitSet {256})other;
+    foreach (idx, val : bitset_self.data) {
+        if (val != bitset_other.data[idx]) return false;
     }
     return true;
 }

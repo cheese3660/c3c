@@ -12,11 +12,11 @@ import std::collections::list;
 
 *>
 struct AutomatonEdge @private {
-    EdgeData associatedData;
-    uint nextState;
-    ushort captureBegin;
-    ushort captureEnd;
-    TransitionType transitionType;
+    EdgeData associated_data;
+    uint next_state;
+    ushort capture_begin;
+    ushort capture_end;
+    TransitionType transition_type;
 }
 
 <*
@@ -26,8 +26,8 @@ struct SingleAutomaton @private {
     uint begin;
     uint end;
     // List { List {AutomatonEdge } } states;
-    List { usz } stateEdgesBegin;
-    List { ushort } stateEdgeCount;
+    List { usz } state_edges_begin;
+    List { ushort } state_edge_count;
     List { AutomatonEdge } edges;
 }
 
@@ -40,8 +40,8 @@ fn void SingleAutomaton.reduce(&self) @private
 {
     @pool() 
     {
-        bool[] keep = mem::temp_array(bool, self.stateEdgesBegin.len());
-        for (usz i = 0; i < self.stateEdgesBegin.len(); i++) keep[i] = false;
+        bool[] keep = mem::temp_array(bool, self.state_edges_begin.len());
+        for (usz i = 0; i < self.state_edges_begin.len(); i++) keep[i] = false;
         keep[self.end] = true;
         keep[self.begin] = true;
 
@@ -52,88 +52,88 @@ fn void SingleAutomaton.reduce(&self) @private
         // 3. Have an edge coming into them that begins or ends a capture group
         //
         // 2 is necessary because of how we store capture groups in memory in the engine itself
-        for (usz analyzing = 0; analyzing < self.stateEdgesBegin.len(); analyzing++) 
+        for (usz analyzing = 0; analyzing < self.state_edges_begin.len(); analyzing++) 
         {
-            usz begin = self.stateEdgesBegin[analyzing];
-            ushort count = self.stateEdgeCount[analyzing];
+            usz begin = self.state_edges_begin[analyzing];
+            ushort count = self.state_edge_count[analyzing];
             
-            for (usz edgeIndex = begin; edgeIndex < begin + count; edgeIndex++) {
-                AutomatonEdge *edge = &self.edges[edgeIndex];
-                if (edge.nextState == self.end) continue;
-                if (edge.transitionType != EPSILON) keep[edge.nextState] = true;
+            for (usz edge_index = begin; edge_index < begin + count; edge_index++) {
+                AutomatonEdge *edge = &self.edges[edge_index];
+                if (edge.next_state == self.end) continue;
+                if (edge.transition_type != EPSILON) keep[edge.next_state] = true;
                 
-                if (edge.captureBegin != 0 || edge.captureEnd != 0) {
-                    keep[edge.nextState] = true;
+                if (edge.capture_begin != 0 || edge.capture_end != 0) {
+                    keep[edge.next_state] = true;
                     keep[analyzing] = true;
                 }
             }
         }
         
-        uint[] remap = mem::temp_array(uint, self.stateEdgesBegin.len());
+        uint[] remap = mem::temp_array(uint, self.state_edges_begin.len());
 
-        usz[] oldBegin = self.stateEdgesBegin.to_tarray();
-        ushort[] oldCount = self.stateEdgeCount.to_tarray();
-        AutomatonEdge[] oldEdges = self.edges.to_tarray();
+        usz[] old_begin = self.state_edges_begin.to_tarray();
+        ushort[] old_count = self.state_edge_count.to_tarray();
+        AutomatonEdge[] old_edges = self.edges.to_tarray();
 
-        self.stateEdgesBegin.clear();
-        self.stateEdgeCount.clear();
+        self.state_edges_begin.clear();
+        self.state_edge_count.clear();
         self.edges.clear();
 
 
-        List { uint } stateStack;
-        List { usz }  edgeStack;
+        List { uint } state_stack;
+        List { usz }  edge_stack;
 
-        for (uint reducing = 0; reducing < oldBegin.len; reducing++) 
+        for (uint reducing = 0; reducing < old_begin.len; reducing++) 
         {
             if (reducing == self.end) {
-                self.stateEdgesBegin.push(0);
-                self.stateEdgeCount.push(0);
+                self.state_edges_begin.push(0);
+                self.state_edge_count.push(0);
                 continue;
             }
 
             if (!keep[reducing]) continue;
             
-            stateStack.clear();
-            edgeStack.clear();
-            stateStack.push(reducing);
-            edgeStack.push(0);
+            state_stack.clear();
+            edge_stack.clear();
+            state_stack.push(reducing);
+            edge_stack.push(0);
 
-            usz newEdgeBegin = self.edges.len();
-            ushort newCount = 0;
+            usz new_edge_begin = self.edges.len();
+            ushort new_count = 0;
 
-            while (stateStack.len() > 0) 
+            while (state_stack.len() > 0) 
             {
-                uint curStateIdx = stateStack.pop()!!;
-                usz curEdgeIdx = edgeStack.pop()!!;
+                uint curStateIdx = state_stack.pop()!!;
+                usz curEdgeIdx = edge_stack.pop()!!;
 
-                if (curEdgeIdx + 1 < oldCount[curStateIdx]) 
+                if (curEdgeIdx + 1 < old_count[curStateIdx]) 
                 {
-                    stateStack.push(curStateIdx);
-                    edgeStack.push(curEdgeIdx + 1);
+                    state_stack.push(curStateIdx);
+                    edge_stack.push(curEdgeIdx + 1);
                 }
 
-                AutomatonEdge edge = oldEdges[oldBegin[curStateIdx] + curEdgeIdx];
+                AutomatonEdge edge = old_edges[old_begin[curStateIdx] + curEdgeIdx];
 
-                if (!keep[edge.nextState]) 
+                if (!keep[edge.next_state]) 
                 {
-                    stateStack.push(edge.nextState);
-                    edgeStack.push(0);
+                    state_stack.push(edge.next_state);
+                    edge_stack.push(0);
                 } 
                 else 
                 {
                     self.edges.push(edge);
-                    newCount += 1;
+                    new_count += 1;
                 }
             }
 
-            remap[reducing] = (uint)self.stateEdgesBegin.len();
-            self.stateEdgesBegin.push(newEdgeBegin);
-            self.stateEdgeCount.push(newCount);
+            remap[reducing] = (uint)self.state_edges_begin.len();
+            self.state_edges_begin.push(new_edge_begin);
+            self.state_edge_count.push(new_count);
         }
 
         foreach (&edge : self.edges)
         {
-            edge.nextState = remap[edge.nextState];
+            edge.next_state = remap[edge.next_state];
         }
 
         self.begin = remap[self.begin];
@@ -146,29 +146,29 @@ fn void SingleAutomaton.reduce(&self) @private
 
     @param [&in] self
     @param [&inout] regex   : "The regex being lowered into"
-    @param automatonIndex   : "The index of this automaton in the regex"
-    @param stateOffset      : "The offset of the first state of this automaton"
-    @param edgeOffset       : "The offset of the first edge of this automaton"
+    @param automaton_index   : "The index of this automaton in the regex"
+    @param state_offset      : "The offset of the first state of this automaton"
+    @param edge_offset       : "The offset of the first edge of this automaton"
 
-    @require automatonIndex < regex.automatonCount : "Invalid automaton index"
-    @require stateOffset + self.stateEdgesBegin.len() <= regex.stateCount : "Invalid state offset"
-    @require edgeOffset + self.edges.len() <= regex.stateCount : "Invalid edge offset"
+    @require automaton_index < regex.automaton_count : "Invalid automaton index"
+    @require state_offset + self.state_edges_begin.len() <= regex.state_count : "Invalid state offset"
+    @require edge_offset + self.edges.len() <= regex.state_count : "Invalid edge offset"
 *>
-fn void SingleAutomaton.insert_into(&self, NfaRegex *regex, ushort automatonIndex, uint stateOffset, usz edgeOffset) @private
+fn void SingleAutomaton.insert_into(&self, NfaRegex *regex, ushort automaton_index, uint state_offset, usz edge_offset) @private
 {
-    regex.automatonBegin[automatonIndex] = self.begin + stateOffset;
-    regex.automatonEnd[automatonIndex] = self.end + stateOffset;
-    foreach (i, edgesBegin : self.stateEdgesBegin) {
-        regex.stateEdgesBegin[i + stateOffset] = edgesBegin + edgeOffset;
-        regex.stateEdgeCount[i + stateOffset] = self.stateEdgeCount[i];
+    regex.automaton_begin[automaton_index] = self.begin + state_offset;
+    regex.automaton_end[automaton_index] = self.end + state_offset;
+    foreach (i, edgesBegin : self.state_edges_begin) {
+        regex.state_edges_begin[i + state_offset] = edgesBegin + edge_offset;
+        regex.state_edge_count[i + state_offset] = self.state_edge_count[i];
     }
 
     foreach (i, &edge : self.edges) {
-        regex.edgeTo[i + edgeOffset] = edge.nextState + stateOffset;
-        regex.transitionType[i + edgeOffset] = edge.transitionType;
-        regex.edgeCaptureBegin[i + edgeOffset] = edge.captureBegin;
-        regex.edgeCaptureEnd[i + edgeOffset] = edge.captureEnd;
-        regex.edgeAssociatedData[i + edgeOffset] = edge.associatedData;
+        regex.edge_to[i + edge_offset] = edge.next_state + state_offset;
+        regex.transition_type[i + edge_offset] = edge.transition_type;
+        regex.edge_capture_begin[i + edge_offset] = edge.capture_begin;
+        regex.edge_capture_end[i + edge_offset] = edge.capture_end;
+        regex.edge_associated_data[i + edge_offset] = edge.associated_data;
     }
 }
 
@@ -181,14 +181,14 @@ struct InternedStringInfo @private
 <*
     Unescape and intern a string into a dstring
 
-    @param toIntern                 : "The string to intern"
-    @param [&in] internmentCache    : "The internment cache itself"
+    @param to_intern                 : "The string to intern"
+    @param [&in] internment_cache    : "The internment cache itself"
 
     @return
 *>
-fn InternedStringInfo unescape_and_intern_string(String toIntern, DString *internmentCache) @private 
+fn InternedStringInfo unescape_and_intern_string(String to_intern, DString *internment_cache) @private 
 {
-    if (internmentCache.len() == 0) internmentCache.tinit();
+    if (internment_cache.len() == 0) internment_cache.tinit();
     @pool() {
         return {};
     };
