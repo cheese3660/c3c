@@ -1,5 +1,7 @@
 module std::regex;
 import std::regex::runtime::automata;
+import std::regex::runtime::lowering;
+import std::io;
 
 alias RuntimeRegex = automata::NfaRegex;
 
@@ -13,6 +15,15 @@ faultdef UNEXPECTED_END_OF_INPUT;
 faultdef INVALID_RANGE_QUANTIFIER;
 faultdef UNEXPECTED_TOKEN;
 faultdef UNTERMINATED_SUBEXPRESSION;
+faultdef INVALID_CAPTURE_GROUP_ID;
+faultdef EXTRANEOUS_PARENTHESES;
+
+<*
+    This error means that the resulting regex has more than 2^24 states or a single state has more than 2^24 edges
+
+    If this is the case then the regex engine will break if it tries to run the regex, so it returns a fault
+*>
+faultdef REGEX_TOO_COMPLEX;
 
 
 <*
@@ -25,7 +36,10 @@ enum Options : const char
     <* $ and ^ match on lines instead of the full string *>
     MULTILINE = 1,
     <* . consumes any amount characters *>
-    SINGLE_LINE = 2
+    SINGLE_LINE = 2,
+
+    <* Do not epsilon reduce the automata *>
+    NO_REDUCTION = 0x80
 }
 
 <*
@@ -52,17 +66,91 @@ interface Regex
 struct Match 
 {
     Allocator allocator;
-    String fullView;
-    <* captureBegin is inclusive*>
-    usz *captureBegin;
-    <* captureEnd is exclusive*>
-    usz *captureEnd;
-    ushort numCaptures;
+    String full_view;
+    <* capture_begin is inclusive*>
+    usz *capture_begin;
+    <* capture_end is exclusive*>
+    usz *capture_end;
+    ushort num_captures;
 }
 
 
 fn void Match.free(&self) 
 {
-    allocator::free(self.allocator,self.captureBegin);
-    allocator::free(self.allocator,self.captureEnd);
+    allocator::free(self.allocator,self.capture_begin);
+    allocator::free(self.allocator,self.capture_end);
+}
+
+fn usz Match.begin_offset(&self) => self.capture_begin[0];
+fn usz Match.end_offset(&self) => self.capture_end[0];
+fn String Match.matched(&self) => self.full_view[self.begin_offset() .. self.end_offset() - 1];
+
+fn usz? Match.to_format(&self, Formatter* formatter) @dynamic
+{
+    return formatter.printf("[%d, %d): %s", self.begin_offset(), self.end_offset(), self.matched());
+}
+
+<*
+    @require i < self.num_captures : "Capture is out of bounds"
+*>
+fn Capture Match.get(&self, usz i) @operator([]) {
+    return {
+        self.full_view[self.capture_begin[i]..self.capture_end[i] - 1],
+        self.capture_begin[i],
+        self.capture_end[i]
+    };
+}
+
+fn usz Match.len(&self) @operator(len) {
+    return self.num_captures;
+}
+
+struct Capture {
+    String captured;
+    usz begin;
+    usz end;   
+}
+
+
+
+fn RuntimeRegex? make_runtime_regex(String regex, Options options, Allocator allocator) @inline => lowering::compile_regex(regex, options, allocator);
+
+<* 
+    This is an iterator over regex matches
+*>
+struct RegexMatchIterator {
+    <* The regex being applied *>
+    Regex regex;
+    <* The index of the iterator *>
+    usz idx;
+    <* The string being checked *>
+    String view;
+}
+
+fn RegexMatchIterator Regex.iter_matches(self, String view)
+{
+    return {
+        self,
+        0,
+        view
+    };
+}
+
+faultdef NO_MORE_MATCHES;
+
+fn Match? RegexMatchIterator.next(&self, Allocator match_allocator=tmem) {
+    while (self.idx < self.view.len) {
+        if (try match = self.regex.match_in_view(self.view,self.idx,match_allocator)) {
+            if (match.end_offset() - match.begin_offset() == 0) {
+                self.idx += 1;
+            }
+            else {
+                self.idx = match.end_offset();
+            }
+            return match;
+        } else {
+            self.idx += 1;
+        }
+    }
+    return NO_MORE_MATCHES?;
 }

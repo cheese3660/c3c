@@ -17,8 +17,8 @@ fn CharacterClass CharacterClass.with_character(self, char c) {
 }
 
 fn CharacterClass CharacterClass.with_fn(self, CharacterFn funct) {
-    for (char i = 0; i < 256; i++) {
-        self[i] = self[i] || funct(i);
+    for (usz i = 0; i < 256; i++) {
+        self[i] = self[i] || funct((char)i);
     }
     return self;
 }
@@ -39,7 +39,7 @@ fn usz? CharacterClass.to_format(&self, Formatter* formatter) @dynamic
 {
     usz n = 0;
     n += formatter.print("[")!;
-    for (char c = 0; c < 256; c++) {
+    for (usz c = 0; c < 256; c++) {
         if (self.get(c)) {
             if (c < 32 || c >= 127) {
                 n += formatter.printf("\\x%02x", c)!;

@@ -44,7 +44,7 @@ union EdgeData
     <* for WILDCARD *>
     struct wildcard 
     {
-        ushort repeat_count;
+        uint repeat_count;
     }
 
     <* For STRING *>
@@ -58,14 +58,14 @@ union EdgeData
     struct character 
     {
         uint index;
-        ushort repeat_count;
+        uint repeat_count;
     }
 
     <* For BACK_REFERENCE *>
     struct back_reference 
     {
         ushort capture_group_index;
-        ushort repeat_count;
+        uint repeat_count;
     }
 
     <* For POS_LOOKAHEAD and NEG_LOOKAHEAD *>
@@ -111,7 +111,7 @@ struct NfaRegex (Regex)
     CharacterClass[] character_class;
 
     <* All string matches concatenated together in one array *>
-    char[] strings;
+    String strings;
 
     <* How many capture groups there are *>
     ushort num_capture_groups;
@@ -348,7 +348,7 @@ fn bool NfaRegex.should_transition(&self, usz edge_offset, usz current_index, St
             }
             return true;
         case STRING:
-            return view[current_index..].starts_with((String)(self.strings[data.string.begin:data.string.len]));
+            return view[current_index..].starts_with((self.strings[data.string.begin:data.string.len]));
         case BACK_REFERENCE:
             usz begin = captures.begin[data.back_reference.capture_group_index - 1];
             usz end = captures.end[data.back_reference.capture_group_index - 1];
@@ -425,6 +425,79 @@ fn bool NfaRegex.should_transition(&self, usz edge_offset, usz current_index, St
     }
 }
 
+
+
+<*
+    Push the next edge to process to the stack
+
+    @param [&in] self
+    @param [&in] ctx          : "The current static contex"
+    @param [&in] stack        : "The stack to push the edge to"
+    @param edge               : "The current edge being processed"
+    @param capture_index      : "The current capture array index"
+    @param consumption_length : "How much data was consumed by this edge"
+*>
+fn void NfaRegex.push_next_edge(
+    &self, 
+    NfaRegexStaticContext* ctx, 
+    List { NfaRegexStackContext }* stack, 
+    usz edge, 
+    usz index,
+    uint capture_index,
+    usz consumption_length
+) @private
+{
+    if 
+    (
+        self.edge_capture_begin[edge] && 
+        ctx.allocated_captures[capture_index].begin[self.edge_capture_begin[edge] - 1] == usz.max
+    )
+    {
+        uint next_group = ctx.get_new_capture_array_from(self.num_capture_groups, capture_index);
+        ctx.update_capture_begin(next_group, self.edge_capture_begin[edge], index);
+
+        stack.push({
+            {
+                next_group,
+                self.edge_to[edge],
+                0
+            },
+            index + consumption_length
+        });
+    } 
+    else if
+    (
+        self.edge_capture_end[edge] &&
+        ctx.allocated_captures[capture_index].end [self.edge_capture_end[edge] - 1]== usz.max
+    ) 
+    {
+        uint next_group = ctx.get_new_capture_array_from(self.num_capture_groups, capture_index);
+        ctx.update_capture_end(next_group, self.edge_capture_end[edge], index);
+
+        stack.push({
+            {
+                next_group,
+                self.edge_to[edge],
+                0
+            },
+            index + consumption_length
+        });
+    } 
+    else 
+    {
+        ctx.allocated_captures[capture_index].ref_count += 1;
+
+        stack.push({
+            {
+                capture_index,
+                self.edge_to[edge],
+                0
+            },
+            index + consumption_length
+        });
+    }
+}
+
 <*
     Try and get a match starting at the current offset in the view
 
@@ -449,6 +522,7 @@ fn Match? NfaRegex.match_in_view(&self, String view, usz offset, Allocator match
         uint starting_capture_array = static_context.get_new_capture_array(self.num_capture_groups);
         usz* array_begin = static_context.allocated_captures[starting_capture_array].begin;
         usz* array_end = static_context.allocated_captures[starting_capture_array].end;
+
         for (ushort i = 0 ; i < self.num_capture_groups; i++) 
         {
             array_begin[i] = usz.max;
@@ -478,7 +552,7 @@ fn Match? NfaRegex.match_in_view(&self, String view, usz offset, Allocator match
             usz edge_offset = current_state_begin + edge_index;
             usz index = currentContext.view_index;
 
-            if (currentContext.p.state_index == end_state) return currentContext.to_match(static_context.allocated_captures[capture_index], view, self.num_capture_groups, offset, match_allocator);
+            if (state_index == end_state) return currentContext.to_match(static_context.allocated_captures[capture_index], view, self.num_capture_groups, offset, match_allocator);
             
             // Push the next edge if there is one
             if (edge_index + 1 < edge_count) 
@@ -498,56 +572,9 @@ fn Match? NfaRegex.match_in_view(&self, String view, usz offset, Allocator match
             
             if (index + consumption_length > view.len) continue;
             
-            if (self.should_transition(edge_offset, index, view, static_context.allocated_captures[capture_index])) continue;
-            if 
-            (
-                self.edge_capture_begin[edge_offset] && 
-                static_context.allocated_captures[capture_index].begin[self.edge_capture_begin[edge_offset] - 1] == usz.max
-            )
-            {
-                uint next_group = static_context.get_new_capture_array_from(self.num_capture_groups, capture_index);
-                static_context.update_capture_begin(next_group, self.edge_capture_begin[edge_offset], index);
-
-                context_stack.push({
-                    {
-                        next_group,
-                        self.edge_to[edge_offset],
-                        0
-                    },
-                    index + consumption_length
-                });
-            } 
-            else if
-            (
-                self.edge_capture_end[edge_offset] &&
-                static_context.allocated_captures[capture_index].end [self.edge_capture_end[edge_offset] - 1]== usz.max
-            ) 
-            {
-                uint next_group = static_context.get_new_capture_array_from(self.num_capture_groups, capture_index);
-                static_context.update_capture_end(next_group, self.edge_capture_end[edge_offset], index);
-
-                context_stack.push({
-                    {
-                        next_group,
-                        self.edge_to[edge_offset],
-                        0
-                    },
-                    index + consumption_length
-                });
-            } 
-            else 
-            {
-                static_context.allocated_captures[capture_index].ref_count += 1;
-
-                context_stack.push({
-                    {
-                        capture_index,
-                        self.edge_to[edge_offset],
-                        0
-                    },
-                    index + consumption_length
-                });
-            }
+            if (!self.should_transition(edge_offset, index, view, static_context.allocated_captures[capture_index])) continue;
+            
+            self.push_next_edge(&static_context, &context_stack, edge_offset, index, capture_index, consumption_length);
         }
 
         return regex::NO_MATCH?;
@@ -581,10 +608,11 @@ fn bool NfaRegex.matches_at(&self, String view, usz offset, usz sub_automaton_in
         uint starting_capture_array = static_context.get_new_capture_array(self.num_capture_groups);
         usz* array_begin = static_context.allocated_captures[starting_capture_array].begin;
         usz* array_end = static_context.allocated_captures[starting_capture_array].end;
+        
         for (ushort i = 0 ; i < self.num_capture_groups; i++) 
         {
-            array_begin[i] = capture_base.begin[i];
-            array_end[i] = capture_base.end[i];
+            array_begin[i] = usz.max;
+            array_end[i] = usz.max;
         }
 
         List { NfaRegexStackContext } context_stack;
@@ -602,7 +630,7 @@ fn bool NfaRegex.matches_at(&self, String view, usz offset, usz sub_automaton_in
         {    
             uint capture_index = currentContext.p.capture_index;
             defer static_context.allocated_captures[capture_index].ref_count -= 1;
-
+            
             uint state_index = currentContext.p.state_index;
             ushort edge_index = currentContext.p.edge_index;
             usz current_state_begin = self.state_edges_begin[state_index];
@@ -610,8 +638,8 @@ fn bool NfaRegex.matches_at(&self, String view, usz offset, usz sub_automaton_in
             usz edge_offset = current_state_begin + edge_index;
             usz index = currentContext.view_index;
 
-            if (currentContext.p.state_index == end_state) return true;
-
+            if (state_index == end_state) return true;
+            
             // Push the next edge if there is one
             if (edge_index + 1 < edge_count) 
             {
@@ -625,59 +653,16 @@ fn bool NfaRegex.matches_at(&self, String view, usz offset, usz sub_automaton_in
                     index
                 });
             }
+            
             usz consumption_length = self.get_consumption_length(edge_offset, static_context.allocated_captures[capture_index]);
+            
             if (index + consumption_length > view.len) continue;
-            if (self.should_transition(edge_offset, index, view, static_context.allocated_captures[capture_index])) continue;
-            if 
-            (
-                self.edge_capture_begin[edge_offset] && 
-                static_context.allocated_captures[capture_index].begin[self.edge_capture_begin[edge_offset] - 1] == usz.max
-            )
-            {
-                uint next_group = static_context.get_new_capture_array_from(self.num_capture_groups, capture_index);
-                static_context.update_capture_begin(next_group, self.edge_capture_begin[edge_offset], index);
+            
+            if (!self.should_transition(edge_offset, index, view, static_context.allocated_captures[capture_index])) continue;
 
-                context_stack.push({
-                    {
-                        next_group,
-                        self.edge_to[edge_offset],
-                        0
-                    },
-                    index + consumption_length
-                });
-            } 
-            else if 
-            (
-                self.edge_capture_end[edge_offset] && 
-                static_context.allocated_captures[capture_index].end [self.edge_capture_end[edge_offset] - 1]== usz.max
-            ) 
-            {
-                uint next_group = static_context.get_new_capture_array_from(self.num_capture_groups, capture_index);
-                static_context.update_capture_end(next_group, self.edge_capture_end[edge_offset], index);
-                
-                context_stack.push({
-                    {
-                        next_group,
-                        self.edge_to[edge_offset],
-                        0
-                    },
-                    index + consumption_length
-                });
-            } 
-            else 
-            {
-                static_context.allocated_captures[capture_index].ref_count += 1;
-
-                context_stack.push({
-                    {
-                        capture_index,
-                        self.edge_to[edge_offset],
-                        0
-                    },
-                    index + consumption_length
-                });
-            }
+            self.push_next_edge(&static_context, &context_stack, edge_offset, index, capture_index, consumption_length);
         }
+
         return false;
     };
 }

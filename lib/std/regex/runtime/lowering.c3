@@ -5,6 +5,7 @@ module std::regex::runtime::lowering;
 
 import std::regex::runtime::automata;
 import std::regex::runtime::character_class;
+import std::regex::runtime::parsing;
 import std::collections::list;
 
 
@@ -87,6 +88,7 @@ fn void SingleAutomaton.reduce(&self) @private
         for (uint reducing = 0; reducing < old_begin.len; reducing++) 
         {
             if (reducing == self.end) {
+                remap[reducing] = (uint)self.state_edges_begin.len();
                 self.state_edges_begin.push(0);
                 self.state_edge_count.push(0);
                 continue;
@@ -153,7 +155,7 @@ fn void SingleAutomaton.reduce(&self) @private
 
     @require automaton_index < regex.automaton_count : "Invalid automaton index"
     @require state_offset + self.state_edges_begin.len() <= regex.state_count : "Invalid state offset"
-    @require edge_offset + self.edges.len() <= regex.state_count : "Invalid edge offset"
+    @require edge_offset + self.edges.len() <= regex.edge_count : "Invalid edge offset"
 *>
 fn void SingleAutomaton.insert_into(&self, NfaRegex *regex, ushort automaton_index, uint state_offset, usz edge_offset) @private
 {
@@ -226,4 +228,344 @@ fn uint intern_character_class(CharacterClass to_intern, List { CharacterClass }
 
     internment_cache.push(to_intern);
     return (uint)(internment_cache.len() - 1);
+}
+
+<*
+    Struct caching information about a lowered subautomaton
+
+    (This is necessary for when we repeat nodes and)
+*>
+struct LoweredSubAutomaton @private
+{
+    RegexNode* entry_node;
+    SingleAutomaton sub_automaton;
+}
+
+struct LoweringContext @private
+{
+    List { LoweredSubAutomaton }* sub_automata;
+    List { CharacterClass }* character_internment_cache;
+    DString* string_interment_cache;
+    ushort* max_capture_group_index;
+    SingleAutomaton automaton;
+}
+
+// All that's needed here is a way to lower a regex to a non-deterministic finite automata
+struct AutomatonLoweringResult @private
+{
+    uint begin;
+    uint end;
+}
+
+fn ushort? LoweringContext.get_sub_automaton(&self, RegexNode* sub_automaton) @private
+{
+    if (self.sub_automata.len() >= ushort.max) return regex::REGEX_TOO_COMPLEX?;
+
+    for (ushort i = 0; i < self.sub_automata.len(); i++)
+    {
+        if (self.sub_automata.get(i).entry_node == sub_automaton) return i + 1;
+    }
+
+    ushort i = (ushort)self.sub_automata.len();
+    self.sub_automata.push({sub_automaton, {}});
+
+    LoweringContext child = {
+        self.sub_automata,
+        self.character_internment_cache,
+        self.string_interment_cache,
+        self.max_capture_group_index,
+        {}
+    };
+
+    AutomatonLoweringResult result = child.lower(sub_automaton)!;
+    child.automaton.begin = result.begin;
+    child.automaton.end = result.end;
+    (*self.sub_automata)[i].sub_automaton = child.automaton;
+
+    return i + 1;
+}
+
+<*
+    Get a state with a given amount of edges
+*>
+fn uint? LoweringContext.get_next_state(&self, uint allocated_edges = 1) @private
+{
+    if (allocated_edges >= 0xFFFFFF) return regex::REGEX_TOO_COMPLEX?;
+    if (self.automaton.state_edge_count.len() >= 0xFFFFFF) return regex::REGEX_TOO_COMPLEX?;
+    uint idx = (uint)self.automaton.state_edge_count.len();
+    self.automaton.state_edge_count.push(0);
+    self.automaton.state_edges_begin.push(self.automaton.edges.len());
+    for (usz i = 0; i < allocated_edges; i++)
+    {
+        self.automaton.edges.push({});
+    }
+    return idx;
+}
+
+<*
+    Add a transition to a state
+    
+    @require state < self.automaton.state_edges_begin.len() : "Invalid starting state number!"
+    @require next_state < self.automaton.state_edges_begin.len() : "Invalid ending state number!"
+
+    @require self.automaton.state_edges_begin[state] + self.automaton.state_edge_count[state] < self.automaton.edges.len() : "Invalid edge index!"
+*>
+fn void LoweringContext.add_transition(&self, uint state, uint next_state, TransitionType transition = EPSILON, EdgeData data = {}, ushort capture_begin = 0, ushort capture_end = 0) @private
+{
+    if (capture_begin > *self.max_capture_group_index) *self.max_capture_group_index = capture_begin;
+    if (capture_end > *self.max_capture_group_index) *self.max_capture_group_index = capture_end;
+
+    usz index = self.automaton.state_edges_begin[state] + self.automaton.state_edge_count[state]++;
+    
+    self.automaton.edges[index] = {
+        data,
+        next_state,
+        capture_begin,
+        capture_end,
+        transition
+    };
+}
+
+<*
+    Lower a single regex node
+
+    @param [&in] node
+    @param required_end_edge_count : "The amount of edges required at the end node"
+    @return "A lowering result consisting of a beginning and ending in the current automaton"
+
+    @return? regex::REGEX_TOO_COMPLEX : "If the regex becomes too complex in the process of lowering"
+*>
+fn AutomatonLoweringResult? LoweringContext.lower(&self, RegexNode* node, uint required_end_edge_count = 0) @private
+{
+    switch (node.type)
+    {
+        case WILDCARD:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            self.add_transition(begin,end, WILDCARD, {.wildcard = {node.repeat_count}});
+            return {begin, end};
+        case STRING:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            InternedStringInfo string_info = intern_string(node.string.str_view(), self.string_interment_cache);
+            self.add_transition(begin,end, STRING, {.string = {(uint)string_info.begin, (uint)string_info.len}});
+            return {begin, end};
+        case BACKREF:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            self.add_transition(begin,end,BACK_REFERENCE, {.back_reference = {node.backref.group_id, node.backref.repeat_count}});
+            return {begin, end};
+        case POSITIVE_CG:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            uint interned = intern_character_class(node.character_group.class, self.character_internment_cache);
+            self.add_transition(begin,end,POS_CHARACTER, {.character = {interned, node.character_group.repeat_count}});
+            return {begin, end};
+        case NEGATIVE_CG:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            uint interned = intern_character_class(node.character_group.class, self.character_internment_cache);
+            self.add_transition(begin,end,NEG_CHARACTER, {.character = {interned, node.character_group.repeat_count}});
+            return {begin, end};
+        case START_ANCHOR:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            self.add_transition(begin,end,START);
+            return {begin, end};
+        case END_ANCHOR:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            self.add_transition(begin,end,END);
+            return {begin, end};
+        case WORD_ANCHOR:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            self.add_transition(begin,end,WORD_BOUNDARY);
+            return {begin, end};
+        case NOT_WORD_ANCHOR:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            self.add_transition(begin,end,NOT_WORD_BOUNDARY);
+            return {begin, end};
+        case POSITIVE_LOOKAHEAD:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            self.add_transition(begin,end,POS_LOOKAHEAD,{.sub_automaton_index = self.get_sub_automaton(node.child)!});
+            return {begin, end};
+        case NEGATIVE_LOOKAHED:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            self.add_transition(begin,end,NEG_LOOKAHEAD,{.sub_automaton_index = self.get_sub_automaton(node.child)!});
+            return {begin, end};
+        case CAPTURE_GROUP:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            AutomatonLoweringResult child = self.lower(node.capture_group.child, 1)!;
+            self.add_transition(begin, child.begin, capture_begin: node.capture_group.group_id);
+            self.add_transition(child.end, end, capture_end: node.capture_group.group_id);
+            return {begin, end};
+        case ZERO_OR_ONE:
+            uint begin = self.get_next_state(2)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            AutomatonLoweringResult child = self.lower(node.child, 1)!;
+            self.add_transition(begin, child.begin);
+            self.add_transition(begin, end);
+            self.add_transition(child.end, end);
+            return {begin, end};
+        case ZERO_OR_MORE:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            AutomatonLoweringResult child = self.lower(node.child, 1)!;
+            self.add_transition(begin, child.begin);
+            self.add_transition(begin, end);
+            self.add_transition(child.end, begin);
+            return {begin, end};
+        case ONE_OR_MORE:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            AutomatonLoweringResult child = self.lower(node.child, 2)!;
+            self.add_transition(begin, child.begin);
+            self.add_transition(child.end, begin);
+            self.add_transition(child.end, end);
+            return {begin, end};
+        case EXACTLY:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            uint previous = begin;
+            for (uint i = 0; i < node.node_and_number.repeat_count; i++)
+            {
+                AutomatonLoweringResult child = self.lower(node.node_and_number.child, 1)!;
+                self.add_transition(previous, child.begin);
+                previous = child.end;
+            }
+            self.add_transition(previous, end);
+            return {begin, end};
+        case AT_LEAST:
+            uint begin = self.get_next_state(1)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            uint previous = begin;
+            for (uint i = 0; i < node.node_and_number.repeat_count; i++)
+            {
+                AutomatonLoweringResult child = self.lower(node.node_and_number.child, 1)!;
+                self.add_transition(previous, child.begin);
+                previous = child.end;
+            }
+            uint middle = self.get_next_state(2)!;
+            AutomatonLoweringResult final = self.lower(node.node_and_number.child, 1)!;
+            self.add_transition(previous, middle);
+            self.add_transition(middle, final.begin);
+            self.add_transition(middle, end);
+            self.add_transition(final.end, middle);
+            return {begin, end};
+        case AT_MOST:
+            uint begin = self.get_next_state(2)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            uint previous = begin;
+            for (uint i = 0; i < node.node_and_number.repeat_count; i++)
+            {
+                AutomatonLoweringResult child = self.lower(node.node_and_number.child, (i + 1 == node.node_and_number.repeat_count) ? 1 : 2)!;
+                self.add_transition(previous, child.begin);
+                self.add_transition(previous, end);
+                previous = child.end;
+            }
+            self.add_transition(previous, end);
+            return {begin, end};
+        case CONCAT:
+            AutomatonLoweringResult left = self.lower(node.binary.lhs, 1)!;
+            AutomatonLoweringResult right = self.lower(node.binary.rhs, required_end_edge_count)!;
+            self.add_transition(left.end, right.begin);
+            return {left.begin, right.end};
+        case DISJUNCT:
+            uint begin = self.get_next_state(2)!;
+            uint end = self.get_next_state(required_end_edge_count)!;
+            AutomatonLoweringResult left = self.lower(node.binary.lhs, 1)!;
+            AutomatonLoweringResult right = self.lower(node.binary.rhs, 1)!;
+
+            self.add_transition(begin, left.begin);
+            self.add_transition(begin, right.begin);
+            self.add_transition(left.end, end);
+            self.add_transition(right.end, end);
+            return {begin, end};
+    }
+}
+
+
+<*
+    Compile a regex into a set of automata, and epsilon reduce it
+*>
+fn NfaRegex? compile_regex(String regexStr, Options options, Allocator allocator)
+{
+    @pool()
+    {
+        RegexNode* regex = parsing::parse_regex(regexStr)!;
+        List { LoweredSubAutomaton } subautomata;
+        List { CharacterClass } classes;
+        DString strings;
+        ushort max_capture_group_index;
+        LoweringContext root_context = {&subautomata, &classes, &strings, &max_capture_group_index, {}};
+        AutomatonLoweringResult result = root_context.lower(regex)!;
+        root_context.automaton.begin = result.begin;
+        root_context.automaton.end = result.end;
+
+        if (options & Options.NO_REDUCTION == 0)
+        {
+            root_context.automaton.reduce();
+            foreach (&automaton : subautomata)
+            {
+                automaton.sub_automaton.reduce();
+            }
+        }
+
+        usz state_count = root_context.automaton.state_edge_count.len();
+        usz edge_count = root_context.automaton.edges.len();
+        // Now let's do some analyses
+        foreach (&automaton : subautomata)
+        {
+            state_count += automaton.sub_automaton.state_edge_count.len();
+            edge_count += automaton.sub_automaton.edges.len();
+            foreach (&edge : automaton.sub_automaton.edges) 
+            {
+                if (edge.capture_begin > max_capture_group_index) return regex::INVALID_CAPTURE_GROUP_ID?;
+                if (edge.capture_end > max_capture_group_index) return regex::INVALID_CAPTURE_GROUP_ID?;
+            }
+        }
+
+        if (state_count >= 0x1000000)
+        {
+            return regex::REGEX_TOO_COMPLEX?;
+        }
+
+        NfaRegex res =
+        {
+            allocator,
+            (ushort)subautomata.len() + 1,
+            allocator::new_array(allocator, uint, subautomata.len() + 1),
+            allocator::new_array(allocator, uint, subautomata.len() + 1),
+            (uint)state_count,
+            allocator::new_array(allocator, usz, state_count),
+            allocator::new_array(allocator, ushort, state_count),
+            edge_count,
+            allocator::new_array(allocator, uint, edge_count),
+            allocator::new_array(allocator, TransitionType, edge_count),
+            allocator::new_array(allocator, ushort, edge_count),
+            allocator::new_array(allocator, ushort, edge_count),
+            allocator::new_array(allocator, EdgeData, edge_count),
+            classes.to_array(allocator),
+            strings.copy_str(allocator),
+            max_capture_group_index,
+            options
+        };
+
+
+        root_context.automaton.insert_into(&res, 0, 0, 0);
+        usz state_offset = root_context.automaton.state_edge_count.len();;
+        usz edge_offset = root_context.automaton.edges.len();
+        foreach (ushort i, &automaton : subautomata)
+        {
+            automaton.sub_automaton.insert_into(&res, i+1, (uint)state_offset, edge_offset);
+            state_offset += automaton.sub_automaton.state_edge_count.len();
+            edge_offset += automaton.sub_automaton.edges.len();
+        }
+        return res;
+    };
 }

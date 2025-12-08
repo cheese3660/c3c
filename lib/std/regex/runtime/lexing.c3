@@ -57,7 +57,7 @@ struct RegexToken
     RegexTokenType type;
     union context 
     {
-        ushort num;
+        uint num;
         char ch;
     }
 }
@@ -134,11 +134,8 @@ struct TokenizerContext
     String tokenizing;
     TokenizerMode mode;
 
-    bool has_stored_next;
-    RegexToken stored_next;
-
-    bool has_stored_next_fault;
-    fault stored_next_fault;
+    bool has_stored_backtrack;
+    RegexToken stored_back_track;
 }
 
 fn TokenizerContext on(String regex) 
@@ -148,8 +145,6 @@ fn TokenizerContext on(String regex)
         DEFLT,
         false,
         {},
-        false,
-        {}
     };
 }
 
@@ -202,7 +197,7 @@ fn char? handle_escape_character(String after_slash, usz* consumed) @private
     @return "Is the tokenizer done tokenizing"
     @pure
 *>
-fn bool TokenizerContext.done(&self) @inline => self.mode == DEFLT && self.tokenizing.len == 0;
+fn bool TokenizerContext.done(&self) @inline => !self.has_stored_backtrack && self.mode == DEFLT && self.tokenizing.len == 0;
 
 <*
     @return? regex::UNTERMINATED_CHARACTER_GROUP : "[ was not matched with ]"
@@ -210,9 +205,16 @@ fn bool TokenizerContext.done(&self) @inline => self.mode == DEFLT && self.token
     @return? regex::UNEXPECTED_CHARACTER : "There was an unexpected character in the sequence"
     @return? regex::INVALID_ESCAPE_SEQUENCE : "The regex had an invalid escape sequence"
     @return? regex::UNEXPECTED_END_OF_INPUT : "The tokenizer is being requested to get more tokens than are in the input"
+    @return? regex::INVALID_CAPTURE_GROUP_ID : "If the regex has a back reference to a capture group of index 65536 or greater"
 *>
 fn RegexToken? TokenizerContext.get_next_token(&self) 
 {
+    if (self.has_stored_backtrack)
+    {
+        self.has_stored_backtrack = false;
+        return self.stored_back_track;
+    }
+
     if (self.tokenizing.len == 0)
     {
         switch (self.mode) 
@@ -278,7 +280,8 @@ fn RegexToken? TokenizerContext.deflt(&self, usz* consumed) @private
             *consumed = end_index;
             RegexToken result;
             result.type = BACKREFERENCE;
-            result.context.num = regex[1..end_index - 1].to_integer(ushort)!;
+            result.context.num = regex[1..end_index - 1].to_integer(uint)!;
+            if (result.context.num > 65535) return regex::INVALID_CAPTURE_GROUP_ID?;
             return result;
         } 
         else 
@@ -334,7 +337,7 @@ fn RegexToken? TokenizerContext.rq(&self, usz* consumed) @private
 
     RegexToken result;
     result.type = RQ_NUMBER;
-    result.context.num = regex[..*consumed - 1].to_integer(ushort)!;
+    result.context.num = regex[..*consumed - 1].to_integer(uint)!;
     return result;
 }
 
@@ -372,4 +375,15 @@ fn RegexToken? TokenizerContext.cg(&self, usz* consumed) @private
     *consumed += 1;
 
     return result;
+}
+
+<*
+    Backtrack one regex token
+
+    @require !self.has_stored_backtrack : "This tokenizer can only backtrack one token"
+*>
+fn void TokenizerContext.backtrack(&self, RegexToken token)
+{
+    self.has_stored_backtrack = true;
+    self.stored_back_track = token;
 }
